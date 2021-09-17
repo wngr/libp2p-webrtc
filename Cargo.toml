@@ -1,0 +1,32 @@
+[package]
+name = "libp2p-webrtc"
+version = "0.1.0"
+edition = "2018"
+authors = ["Oliver Wangler <oliver@wngr.de>"]
+description = "WebRTC transport for libp2p"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/wngr/libp2p-webrtc"
+homepage = "https://github.com/wngr/libp2p-webrtc"
+documentation = "https://docs.rs/libp2p-webrtc"
+keywords = ["webrtc", "libp2p", "transport"]
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.44"
+async-datachannel = "0.2.0"
+async-stream = "0.3.2"
+async-tungstenite = { version = "0.15.0", features = ["tokio", "tokio-openssl"] }
+http = "0.2.4"
+libp2p = { version = "0.39.1", default-features = false }
+parking_lot = "0.11.2"
+serde = { version = "1.0.130", features = ["derive"] }
+serde_json = "1.0.68"
+thiserror = "1.0.29"
+tokio = { version = "1.11.0", features = ["full"] }
+tokio-stream = "0.1.7"
+tokio-util = { version = "0.6.8", features = ["compat"] }
+tracing = "0.1.27"
+
+[dev-dependencies]
+libp2p = { version = "0.39.1", features = ["ping"] }
+tracing-subscriber = "0.2.23"

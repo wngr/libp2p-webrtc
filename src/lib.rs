@@ -3,9 +3,10 @@ use std::sync::{
     Arc,
 };
 
+use crate::ws::CombinedStream;
 use async_datachannel::{DataStream, PeerConnection, RtcConfig};
 use async_stream::try_stream;
-use async_tungstenite::{tokio::connect_async, tungstenite::Message};
+use async_tungstenite::tungstenite::Message;
 use libp2p::{
     core::transport::ListenerEvent,
     futures::{
@@ -19,6 +20,8 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
 use tracing::{debug, error};
+
+mod ws;
 
 #[derive(Clone)]
 pub struct WebRtcTransport {
@@ -134,7 +137,7 @@ impl Transport for WebRtcTransport {
         };
 
         let fut = async move {
-            let (mut ws_tx, mut ws_rx) = connect_async(&signaling_uri).await?.0.split();
+            let (mut ws_tx, mut ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
             let connection = conn.dial("unused").into_stream();
             pin_mut!(connection);
             loop {
@@ -195,7 +198,7 @@ impl Transport for WebRtcTransport {
 impl WebRtcTransport {
     async fn listen_single(&self, signaling_uri: &str) -> anyhow::Result<(PeerId, DataStream)> {
         println!("connecting to {}", signaling_uri);
-        let (mut ws_tx, mut ws_rx) = connect_async(signaling_uri).await?.0.split();
+        let (mut ws_tx, mut ws_rx) = CombinedStream::connect(signaling_uri).await?.split();
         println!("connected to {}", signaling_uri);
 
         let (tx_outbound, mut rx_outbound) = mpsc::channel(32);

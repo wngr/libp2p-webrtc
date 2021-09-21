@@ -30,6 +30,7 @@ tracing = "0.1.27"
 
 [dev-dependencies]
 libp2p = { version = "0.39.1", features = ["ping"] }
+tokio = { version = "1.11.0", features = ["full"] }
 tracing-subscriber = "0.2.23"
 
 [target.wasm32.dependencies]

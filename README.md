@@ -8,6 +8,7 @@
 // TODO
 - [ ] Error handling
 - [ ] Handle connection storm
+- Mention that wasm transport is `!Send`
 ...
 
 ## Quickstart

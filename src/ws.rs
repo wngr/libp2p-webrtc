@@ -1,8 +1,8 @@
 use std::task::Poll;
 
+#[cfg(not(target_arch = "wasm32"))]
 use async_tungstenite::{
     tokio::{connect_async, ConnectStream},
-    tungstenite::Message,
     WebSocketStream,
 };
 use libp2p::futures::{Sink, Stream};
@@ -20,6 +20,42 @@ enum InnerStream {
 pub(crate) struct CombinedStream {
     #[pin]
     inner: InnerStream,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) enum Message {
+    Text(String),
+    Binary(Vec<u8>),
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
+    Close,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<async_tungstenite::tungstenite::Message> for Message {
+    fn from(m: async_tungstenite::tungstenite::Message) -> Self {
+        use Message::*;
+        match m {
+            async_tungstenite::tungstenite::Message::Text(t) => Text(t),
+            async_tungstenite::tungstenite::Message::Binary(b) => Binary(b),
+            async_tungstenite::tungstenite::Message::Ping(p) => Ping(p),
+            async_tungstenite::tungstenite::Message::Pong(p) => Pong(p),
+            async_tungstenite::tungstenite::Message::Close(_) => Close,
+        }
+    }
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Into<async_tungstenite::tungstenite::Message> for Message {
+    fn into(self) -> async_tungstenite::tungstenite::Message {
+        match self {
+            Message::Text(t) => async_tungstenite::tungstenite::Message::Text(t),
+            Message::Binary(b) => async_tungstenite::tungstenite::Message::Binary(b),
+            Message::Ping(p) => async_tungstenite::tungstenite::Message::Ping(p),
+            Message::Pong(p) => async_tungstenite::tungstenite::Message::Pong(p),
+            Message::Close => async_tungstenite::tungstenite::Message::Close(None),
+        }
+    }
 }
 
 impl CombinedStream {
@@ -41,7 +77,7 @@ impl Stream for CombinedStream {
     ) -> Poll<Option<Self::Item>> {
         match self.project().inner.project() {
             #[cfg(not(target_arch = "wasm32"))]
-            EnumProj::Native(s) => s.poll_next(cx).map_err(Into::into),
+            EnumProj::Native(s) => s.poll_next(cx).map_ok(Message::from).map_err(Into::into),
             #[cfg(target_arch = "wasm32")]
             EnumProj::Wasm(s) => match s.poll_next(cx) {
                 Poll::Ready(Some(x)) => match x {
@@ -75,7 +111,7 @@ impl Sink<Message> for CombinedStream {
     fn start_send(self: std::pin::Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
         match self.project().inner.project() {
             #[cfg(not(target_arch = "wasm32"))]
-            EnumProj::Native(s) => s.start_send(item).map_err(Into::into),
+            EnumProj::Native(s) => s.start_send(item.into()).map_err(Into::into),
             #[cfg(target_arch = "wasm32")]
             EnumProj::Wasm(s) => {
                 if let Some(msg) = match item {

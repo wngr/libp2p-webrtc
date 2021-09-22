@@ -1,4 +1,4 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 mod tests {
     use libp2p::{
         core::{self, upgrade::AuthenticationVersion, PeerId},
@@ -10,13 +10,11 @@ mod tests {
     };
     use libp2p_webrtc::WebRtcTransport;
     use log::*;
-    use std::{process::Stdio, time::Duration};
-    use tokio::{
-        io::{AsyncBufReadExt, BufReader},
-        process::Command,
-        time::timeout,
-    };
-    use tracing_subscriber::fmt;
+    use std::time::Duration;
+    use wasm_bindgen_futures::spawn_local;
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
 
     fn mk_swarm() -> Swarm<MyBehaviour> {
         let identity = identity::Keypair::generate_ed25519();
@@ -53,27 +51,16 @@ mod tests {
             peer_id,
         )
         .executor(Box::new(|f| {
-            tokio::spawn(f);
+            spawn_local(f);
         }))
         .build()
     }
 
-    #[tokio::test]
-    async fn native_native() -> anyhow::Result<()> {
-        fmt::init();
-        let mut cmd = Command::new("cargo");
-        cmd.args(&["run", "--bin", "signaling-server"])
-            .stdout(Stdio::piped())
-            .kill_on_drop(true);
-        let mut server = cmd.spawn()?;
-        let stdout = server.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout).lines();
-        while let Some(line) = reader.next_line().await? {
-            if line.starts_with("Listening on") {
-                break;
-            }
-        }
-        info!("Signaling server started!");
+    #[wasm_bindgen_test]
+    async fn wasm_wasm() {
+        console_log::init_with_level(Level::Trace).unwrap();
+
+        // make sure signaling server is started
         let mut swarm_0 = mk_swarm();
         let peer_0 = *swarm_0.local_peer_id();
         info!("Local peer id 0: {}", peer_0);
@@ -84,7 +71,7 @@ mod tests {
         // /ip4/ws_signaling_ip/tcp/ws_signaling_port/{ws,wss}/p2p-webrtc-star/p2p/remote_peer_id
         swarm_0
             .listen_on(
-                "/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star"
+                "/ip4/127.0.0.1/tcp/8001/ws/p2p-webrtc-star"
                     .parse()
                     .unwrap(),
             )
@@ -92,7 +79,7 @@ mod tests {
 
         swarm_1
             .listen_on(
-                "/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star"
+                "/ip4/127.0.0.1/tcp/8001/ws/p2p-webrtc-star"
                     .parse()
                     .unwrap(),
             )
@@ -100,7 +87,7 @@ mod tests {
 
         let s0 = async move {
             swarm_0.dial_addr(
-                format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_1).parse()?,
+                format!("/ip4/127.0.0.1/tcp/8001/ws/p2p-webrtc-star/p2p/{}", peer_1).parse()?,
             )?;
 
             while let Some(event) = swarm_0.next().await {
@@ -144,8 +131,8 @@ mod tests {
             }
             anyhow::Result::<_, anyhow::Error>::Ok(())
         };
-        timeout(Duration::from_secs(5), future::try_join(s0, s1)).await??;
-        Ok(())
+
+        future::try_join(s0, s1).await.unwrap();
     }
 
     #[derive(Debug)]

@@ -3,23 +3,29 @@ use std::sync::{
     Arc,
 };
 
-use crate::ws::CombinedStream;
-use async_datachannel::{DataStream, PeerConnection, RtcConfig};
+use crate::ws::{CombinedStream, Message};
+use anyhow::Context;
+#[cfg(not(target_arch = "wasm32"))]
+use async_datachannel::{DataStream, Message as DataChannelMessage, PeerConnection, RtcConfig};
+#[cfg(target_arch = "wasm32")]
+use async_datachannel_wasm::{
+    DataStream, Message as DataChannelMessage, PeerConnection, RtcConfig,
+};
 use async_stream::try_stream;
-use async_tungstenite::tungstenite::Message;
 use libp2p::{
     core::transport::ListenerEvent,
     futures::{
-        future::BoxFuture, pin_mut, stream::BoxStream, FutureExt, SinkExt, StreamExt, TryFutureExt,
+        channel::mpsc, future::BoxFuture, pin_mut, select_biased, stream::BoxStream, Future,
+        FutureExt, SinkExt, StreamExt, TryFutureExt,
     },
     multiaddr::Protocol,
     Multiaddr, PeerId, Transport,
 };
+use log::{debug, error};
+#[cfg(target_arch = "wasm32")]
+use send_wrapper::SendWrapper;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::mpsc;
-use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
-use tracing::{debug, error};
 
 mod ws;
 
@@ -43,7 +49,7 @@ pub struct SignalingMessage {
     pub intent_id: SignalingId,
     #[serde(with = "serde_str")]
     pub callee: PeerId,
-    pub signal: async_datachannel::Message,
+    pub signal: DataChannelMessage,
 }
 
 #[derive(Error, Debug)]
@@ -66,7 +72,7 @@ impl WebRtcTransport {
 
 #[allow(clippy::type_complexity)]
 impl Transport for WebRtcTransport {
-    type Output = Compat<DataStream>;
+    type Output = DataStream;
 
     type Error = Error;
 
@@ -94,9 +100,9 @@ impl Transport for WebRtcTransport {
         Ok(try_stream! {
             loop {
                 let upgrade = self
-                    .listen_single(&signaling_uri)
-                    .await
-                    .map_err(|e| Error::Whatever(format!("{:#}", e)));
+                    .listen_single(signaling_uri.clone())
+                    .map_err(|e| Error::Whatever(format!("{:#}", e)))
+                    .await;
                 let remote_addr = if let Ok((p, _)) = upgrade {
                     addr.clone().with(Protocol::P2p(p.into()))
                 } else {
@@ -104,7 +110,7 @@ impl Transport for WebRtcTransport {
                 };
 
                 yield ListenerEvent::Upgrade {
-                    upgrade: async move { upgrade.map(|(_, u)| u.compat()) }.boxed(),
+                    upgrade: async move { upgrade.map(|(_, u)| u) }.boxed(),
                     remote_addr,
                     local_addr: local_addr.clone()
                 };
@@ -128,7 +134,7 @@ impl Transport for WebRtcTransport {
         let signaling_uri = format!("{}/{}/{}", signaling_uri, self.own_peer_id, counter);
 
         let (tx_outbound, mut rx_outbound) = mpsc::channel(32);
-        let (tx_inbound, rx_inbound) = mpsc::channel(32);
+        let (mut tx_inbound, rx_inbound) = mpsc::channel(32);
         let conn = PeerConnection::new(&self.config, (tx_outbound, rx_inbound))
             .map_err(|e| libp2p::TransportError::Other(Error::Whatever(format!("{:#}", e))))?;
         let identifier = SignalingId {
@@ -137,18 +143,19 @@ impl Transport for WebRtcTransport {
         };
 
         let fut = async move {
-            let (mut ws_tx, mut ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
-            let connection = conn.dial("unused").into_stream();
+            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
+            let connection = conn.dial("unused").into_stream().fuse();
+            let mut ws_rx = ws_rx.fuse();
             pin_mut!(connection);
             loop {
-                tokio::select! {
-                    biased;
-
-                    Some(conn) = connection.next() => {
+                select_biased! {
+                    conn = connection.next() => {
+                        let conn = conn.context("Stream ended")?;
                         debug!("dial: created data stream");
-                        break conn.map(|c| c.compat());
+                        break conn;
                     },
-                    Some(incoming_ws) = ws_rx.next() => {
+                    incoming_ws = ws_rx.next() => {
+                        let incoming_ws = incoming_ws.context("Stream ended")?;
                         debug!("dial: received message {:?}", incoming_ws);
                         let message = match incoming_ws {
                            Ok(Message::Text(t)) => {
@@ -157,7 +164,7 @@ impl Transport for WebRtcTransport {
                            Ok(Message::Binary(b)) => {
                                Some(serde_json::from_slice::<SignalingMessage>(&b[..]))
                            },
-                           Ok(Message::Close(_)) => None,
+                           Ok(Message::Close) => None,
                            x => anyhow::bail!("Connection to signaling server closed ({:?})", x)
                         };
                         match message {
@@ -167,7 +174,8 @@ impl Transport for WebRtcTransport {
                             _ => {},
                         }
                     },
-                    Some(signal) = rx_outbound.recv() => {
+                    signal = rx_outbound.next() => {
+                        let signal = signal.context("Stream ended")?;
                         let m = SignalingMessage {
                             intent_id: identifier.clone(),
                             callee: peer,
@@ -175,15 +183,14 @@ impl Transport for WebRtcTransport {
                         };
                         debug!("dial: sending message {:?}", m);
                         let bytes = serde_json::to_vec(&m)?;
-                        ws_tx.send(Message::binary(bytes)).await?;
+                        ws_tx.send(Message::Binary(bytes)).await?;
                     },
-                    else => anyhow::bail!("FIXME"),
                 }
             }
-        }
-        .map_err(|e| Error::Whatever(format!("{:#}", e)))
-        .boxed();
-        Ok(fut)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let fut = SendWrapper::new(fut);
+        Ok(fut.map_err(|e| Error::Whatever(format!("{:#}", e))).boxed())
     }
 
     fn address_translation(
@@ -196,65 +203,78 @@ impl Transport for WebRtcTransport {
     }
 }
 impl WebRtcTransport {
-    async fn listen_single(&self, signaling_uri: &str) -> anyhow::Result<(PeerId, DataStream)> {
-        println!("connecting to {}", signaling_uri);
-        let (mut ws_tx, mut ws_rx) = CombinedStream::connect(signaling_uri).await?.split();
-        println!("connected to {}", signaling_uri);
+    fn listen_single(
+        &self,
+        signaling_uri: String,
+    ) -> impl Future<Output = anyhow::Result<(PeerId, DataStream)>> + Send {
+        let config = self.config.clone();
+        let own_peer_id = self.own_peer_id;
+        let fut = async move {
+            println!("connecting to {}", signaling_uri);
+            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
+            let mut ws_rx = ws_rx.fuse();
+            println!("connected to {}", signaling_uri);
 
-        let (tx_outbound, mut rx_outbound) = mpsc::channel(32);
-        let (tx_inbound, rx_inbound) = mpsc::channel(32);
-        let conn = PeerConnection::new(&self.config, (tx_outbound, rx_inbound))
-            .map_err(|e| Error::Whatever(format!("{:#}", e)))?;
+            let (tx_outbound, mut rx_outbound) = mpsc::channel(32);
+            let (mut tx_inbound, rx_inbound) = mpsc::channel(32);
+            let conn = PeerConnection::new(&config, (tx_outbound, rx_inbound))
+                .map_err(|e| Error::Whatever(format!("{:#}", e)))?;
 
-        let upgrade = conn.accept().into_stream();
-        pin_mut!(upgrade);
-        let mut identifier = None;
-        let io = loop {
-            tokio::select! {
-                Some(conn) = upgrade.next() => {
-                    debug!("listen: created data stream");
-                    break conn?;
-                },
-                Some(incoming_ws) = ws_rx.next() => {
-                    debug!("listen: received message {:?}", incoming_ws);
-                    let message = match incoming_ws {
-                       Ok(Message::Text(t)) => {
-                           Some(serde_json::from_str::<SignalingMessage>(&t))
-                       },
-                       Ok(Message::Binary(b)) => {
-                           Some(serde_json::from_slice::<SignalingMessage>(&b[..]))
-                       },
-                       Ok(Message::Close(_)) => None,
-                       x => anyhow::bail!("Connection to signaling server closed ({:?})", x)
-                    };
-                    match message {
-                        Some(Ok(m)) if identifier.is_none() => {
-                            debug!("Inbound connection with {:?}", m.intent_id);
-                            identifier.replace(m.intent_id);
-                            tx_inbound.send(m.signal).await?;
-                        },
-                        Some(Ok(m)) if identifier.as_ref() == Some(&m.intent_id) => {
-                            tx_inbound.send(m.signal).await?;
-                        },
-                        Some(Ok(m)) => error!("Received message with unexpected identifier {:?}", m.intent_id),
-                        Some(Err(e)) => error!("Error ws_rxing from WS: {:?}", e),
-                        None => {},
-                    }
-                },
-                Some(signal) = rx_outbound.recv() => {
-                    let m = SignalingMessage {
-                        intent_id: identifier.as_ref().cloned().expect("Sending message before received one"),
-                        callee: self.own_peer_id,
-                        signal,
-                    };
-                    debug!("listen: sending message {:?}", m);
-                    let bytes = serde_json::to_vec(&m)?;
-                    ws_tx.send(Message::binary(bytes)).await?;
-                },
-                else => anyhow::bail!("FIXME"),
-            }
+            let upgrade = conn.accept().into_stream().fuse();
+            pin_mut!(upgrade);
+            let mut identifier = None;
+            let io = loop {
+                select_biased! {
+                    conn = upgrade.next() => {
+                        let conn = conn.context("Stream ended")?;
+                        debug!("listen: created data stream");
+                        break conn?;
+                    },
+                    incoming_ws = ws_rx.next() => {
+                        let incoming_ws = incoming_ws.context("Stream ended")?;
+                        debug!("listen: received message {:?}", incoming_ws);
+                        let message = match incoming_ws {
+                           Ok(Message::Text(t)) => {
+                               Some(serde_json::from_str::<SignalingMessage>(&t))
+                           },
+                           Ok(Message::Binary(b)) => {
+                               Some(serde_json::from_slice::<SignalingMessage>(&b[..]))
+                           },
+                           Ok(Message::Close) => None,
+                           x => anyhow::bail!("Connection to signaling server closed ({:?})", x)
+                        };
+                        match message {
+                            Some(Ok(m)) if identifier.is_none() => {
+                                debug!("Inbound connection with {:?}", m.intent_id);
+                                identifier.replace(m.intent_id);
+                                tx_inbound.send(m.signal).await?;
+                            },
+                            Some(Ok(m)) if identifier.as_ref() == Some(&m.intent_id) => {
+                                tx_inbound.send(m.signal).await?;
+                            },
+                            Some(Ok(m)) => error!("Received message with unexpected identifier {:?}", m.intent_id),
+                            Some(Err(e)) => error!("Error ws_rxing from WS: {:?}", e),
+                            None => {},
+                        }
+                    },
+                    signal = rx_outbound.next() => {
+                        let signal = signal.context("Stream ended")?;
+                        let m = SignalingMessage {
+                            intent_id: identifier.as_ref().cloned().expect("Sending message before received one"),
+                            callee: own_peer_id,
+                            signal,
+                        };
+                        debug!("listen: sending message {:?}", m);
+                        let bytes = serde_json::to_vec(&m)?;
+                        ws_tx.send(Message::Binary(bytes)).await?;
+                    },
+                }
+            };
+            Ok((identifier.expect("Negotiation happened").caller, io))
         };
-        Ok((identifier.expect("Negotiation happened").caller, io))
+        #[cfg(target_arch = "wasm32")]
+        let fut = SendWrapper::new(fut);
+        fut
     }
 }
 

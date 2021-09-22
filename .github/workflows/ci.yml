@@ -1,10 +1,13 @@
 on: [push, pull_request]
 
-name: libp2p-webrtc
+name: async-datachannel
 
 jobs:
   validation:
     runs-on: ubuntu-latest
+    strategy: 
+      matrix:
+        toolchain: [x86_64-unknown-linux-gnu, wasm32-unknown-unknown]
     steps:
     - name: Checkout sources
       uses: actions/checkout@v2
@@ -16,10 +19,20 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: cargo clippy
-      run: cargo clippy --workspace --examples --tests --all-features -- -D warnings
+      run: cargo clippy --target ${{ matrix.toolchain }} --workspace --examples --tests --all-features -- -D warnings
     
     - name: cargo build
-      run: cargo build --locked
+      run: cargo build --locked --target ${{ matrix.toolchain }}
 
     - name: cargo test
-      run: RUST_LOG=debug cargo test --all-features
+      if: ${{ matrix.toolchain != 'wasm32-unknown-unknown' }}
+      run: RUST_LOG=debug cargo test --all-features --targt ${{ matrix.toolchain }}
+
+    - name: install wasm-pack
+      if: ${{ matrix.toolchain == 'wasm32-unknown-unknown' }}
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+    - name: wasm-pack test
+      if: ${{ matrix.dir == 'wasm' }}
+      run: wasm-pack test --firefox --chrome --headless
+

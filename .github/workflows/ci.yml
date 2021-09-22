@@ -26,13 +26,21 @@ jobs:
 
     - name: cargo test
       if: ${{ matrix.toolchain != 'wasm32-unknown-unknown' }}
-      run: RUST_LOG=debug cargo test --all-features --targt ${{ matrix.toolchain }}
+      run: RUST_LOG=debug cargo test --all-features --target ${{ matrix.toolchain }}
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout sources
+      uses: actions/checkout@v2
+
+    - name: setup rustup
+      run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
 
     - name: install wasm-pack
-      if: ${{ matrix.toolchain == 'wasm32-unknown-unknown' }}
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-    - name: wasm-pack test
-      if: ${{ matrix.dir == 'wasm' }}
-      run: wasm-pack test --firefox --chrome --headless
+    - name: integration tests
+      working-directory: integration
+      run: cargo run
 

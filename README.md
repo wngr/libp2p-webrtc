@@ -6,6 +6,8 @@
 
 
 // TODO
+- [ ] Error handling
+- [ ] Handle connection storm
 ...
 
 ## Quickstart

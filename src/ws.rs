@@ -46,9 +46,9 @@ impl From<async_tungstenite::tungstenite::Message> for Message {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-impl Into<async_tungstenite::tungstenite::Message> for Message {
-    fn into(self) -> async_tungstenite::tungstenite::Message {
-        match self {
+impl From<Message> for async_tungstenite::tungstenite::Message {
+    fn from(o: Message) -> Self {
+        match o {
             Message::Text(t) => async_tungstenite::tungstenite::Message::Text(t),
             Message::Binary(b) => async_tungstenite::tungstenite::Message::Binary(b),
             Message::Ping(p) => async_tungstenite::tungstenite::Message::Ping(p),

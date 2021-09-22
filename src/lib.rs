@@ -1,3 +1,4 @@
+#![allow(clippy::let_and_return)]
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,

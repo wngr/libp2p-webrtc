@@ -49,8 +49,8 @@ wasm-bindgen-futures = "0.4.28"
 wasm-bindgen-test = "0.3.28"
 
 [patch.crates-io]
-async-datachannel = { path = "../async-datachannel/native" }
-async-datachannel-wasm = { path = "../async-datachannel/wasm" }
+async-datachannel = { git = "https://github.com/wngr/async-datachannel" }
+async-datachannel-wasm = { git = "https://github.com/wngr/async-datachannel" }
 libp2p = { git = "https://github.com/wngr/rust-libp2p", branch = "ow/wasm" }
 instant = { git = "https://github.com/wngr/instant" }
 

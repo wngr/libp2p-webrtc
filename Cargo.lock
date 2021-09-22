@@ -85,6 +85,7 @@ checksum = "9d6e24d2cce90c53b948c46271bfb053e4bdc2db9b5d3f65e20f8cf28a1b7fc3"
 [[package]]
 name = "async-datachannel"
 version = "0.2.1"
+source = "git+https://github.com/wngr/async-datachannel#53ea0a1abce67790544f16004053704b1039bcdc"
 dependencies = [
  "anyhow",
  "datachannel",
@@ -98,6 +99,7 @@ dependencies = [
 [[package]]
 name = "async-datachannel-wasm"
 version = "0.1.1"
+source = "git+https://github.com/wngr/async-datachannel#53ea0a1abce67790544f16004053704b1039bcdc"
 dependencies = [
  "anyhow",
  "futures",

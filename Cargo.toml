@@ -49,7 +49,6 @@ wasm-bindgen-test = "0.3.28"
 
 [patch.crates-io]
 libp2p = { git = "https://github.com/wngr/rust-libp2p", branch = "ow/wasm" }
-instant = { git = "https://github.com/sebcrozet/instant" }
 
 [dev-dependencies]
 libp2p = { version = "0.40.0", features = ["ping", "noise", "mplex", "yamux"], default_features = false }

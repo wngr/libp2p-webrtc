@@ -1124,6 +1124,7 @@ dependencies = [
  "async-stream",
  "async-tungstenite",
  "console_log",
+ "futures-timer",
  "http",
  "libp2p",
  "log",

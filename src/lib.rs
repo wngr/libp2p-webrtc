@@ -1,7 +1,10 @@
 #![allow(clippy::let_and_return)]
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use crate::ws::{CombinedStream, Message};
@@ -13,6 +16,7 @@ use async_datachannel_wasm::{
     DataStream, Message as DataChannelMessage, PeerConnection, RtcConfig,
 };
 use async_stream::try_stream;
+use futures_timer::Delay;
 use libp2p::{
     core::transport::ListenerEvent,
     futures::{
@@ -22,7 +26,7 @@ use libp2p::{
     multiaddr::Protocol,
     Multiaddr, PeerId, Transport,
 };
-use log::{debug, error};
+use log::{debug, error, warn};
 #[cfg(target_arch = "wasm32")]
 use send_wrapper::SendWrapper;
 use serde::{Deserialize, Serialize};
@@ -55,8 +59,10 @@ pub struct SignalingMessage {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Whatever")]
-    Whatever(String),
+    #[error("Connection to signaling server failed: {0}")]
+    ConnectionToSignalingServerFailed(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }
 
 impl WebRtcTransport {
@@ -91,7 +97,7 @@ impl Transport for WebRtcTransport {
     where
         Self: Sized,
     {
-        println!("called listen on with {}", addr);
+        debug!("called listen on with {}", addr);
         let (signaling_uri, _) = extract_uri(&addr)
             .map_err(|_| libp2p::TransportError::MultiaddrNotSupported(addr.clone()))?;
         let signaling_uri = format!("{}/{}", signaling_uri, self.own_peer_id);
@@ -99,11 +105,20 @@ impl Transport for WebRtcTransport {
         // input addr
         // /ip4/ws_signaling_ip/tcp/ws_signaling_port/{ws,wss}/p2p-webrtc-star/p2p/remote_peer_id
         Ok(try_stream! {
+            let mut backoff: Option<u64> = None;
             loop {
-                let upgrade = self
-                    .listen_single(signaling_uri.clone())
-                    .map_err(|e| Error::Whatever(format!("{:#}", e)))
-                    .await;
+                let upgrade = self.listen_single(signaling_uri.clone()).await;
+                let is_outbound_conn_err = if let Err(ref e) = upgrade {
+                    matches!(
+                        e,
+                        Error::ConnectionToSignalingServerFailed(_)
+                    )
+                } else {
+                    // Reset backoff
+                    backoff.take();
+                    false
+                };
+
                 let remote_addr = if let Ok((p, _)) = upgrade {
                     addr.clone().with(Protocol::P2p(p.into()))
                 } else {
@@ -111,10 +126,26 @@ impl Transport for WebRtcTransport {
                 };
 
                 yield ListenerEvent::Upgrade {
-                    upgrade: async move { upgrade.map(|(_, u)| u) }.boxed(),
+                    upgrade: async move {
+                        upgrade
+                            .map_err(Into::into)
+                            .map(|(_, u)| u)
+                    }
+                    .boxed(),
                     remote_addr,
-                    local_addr: local_addr.clone()
+                    local_addr: local_addr.clone(),
                 };
+                if is_outbound_conn_err {
+                    let wait_for = if let Some(b) = backoff.as_mut() {
+                        *b *= 2;
+                        *b
+                    } else {
+                        backoff.replace(1);
+                        1
+                    };
+                    warn!("Outbound connection error to signaling server, will retry in {} secs", wait_for);
+                    Delay::new(Duration::from_secs(wait_for)).await;
+                }
             }
         }
         .boxed())
@@ -137,7 +168,7 @@ impl Transport for WebRtcTransport {
         let (tx_outbound, mut rx_outbound) = mpsc::channel(32);
         let (mut tx_inbound, rx_inbound) = mpsc::channel(32);
         let conn = PeerConnection::new(&self.config, (tx_outbound, rx_inbound))
-            .map_err(|e| libp2p::TransportError::Other(Error::Whatever(format!("{:#}", e))))?;
+            .map_err(|e| libp2p::TransportError::Other(e.into()))?;
         let identifier = SignalingId {
             caller: self.own_peer_id,
             counter,
@@ -191,7 +222,7 @@ impl Transport for WebRtcTransport {
         };
         #[cfg(target_arch = "wasm32")]
         let fut = SendWrapper::new(fut);
-        Ok(fut.map_err(|e| Error::Whatever(format!("{:#}", e))).boxed())
+        Ok(fut.map_err(Into::into).boxed())
     }
 
     fn address_translation(
@@ -203,23 +234,27 @@ impl Transport for WebRtcTransport {
         None
     }
 }
+
 impl WebRtcTransport {
     fn listen_single(
         &self,
         signaling_uri: String,
-    ) -> impl Future<Output = anyhow::Result<(PeerId, DataStream)>> + Send {
+    ) -> impl Future<Output = Result<(PeerId, DataStream), Error>> + Send {
         let config = self.config.clone();
         let own_peer_id = self.own_peer_id;
         let fut = async move {
-            println!("connecting to {}", signaling_uri);
-            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
+            debug!("connecting to {}", signaling_uri);
+            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri)
+                .await
+                .map_err(|e| Error::ConnectionToSignalingServerFailed(format!("{:#}", e)))?
+                .split();
             let mut ws_rx = ws_rx.fuse();
-            println!("connected to {}", signaling_uri);
+            debug!("connected to {}", signaling_uri);
 
             let (tx_outbound, mut rx_outbound) = mpsc::channel(32);
             let (mut tx_inbound, rx_inbound) = mpsc::channel(32);
-            let conn = PeerConnection::new(&config, (tx_outbound, rx_inbound))
-                .map_err(|e| Error::Whatever(format!("{:#}", e)))?;
+            let conn =
+                PeerConnection::new(&config, (tx_outbound, rx_inbound)).map_err(Error::Internal)?;
 
             let upgrade = conn.accept().into_stream().fuse();
             pin_mut!(upgrade);
@@ -242,16 +277,16 @@ impl WebRtcTransport {
                                Some(serde_json::from_slice::<SignalingMessage>(&b[..]))
                            },
                            Ok(Message::Close) => None,
-                           x => anyhow::bail!("Connection to signaling server closed ({:?})", x)
+                           x => return Err(anyhow::anyhow!("Connection to signaling server closed ({:?})", x).into()),
                         };
                         match message {
                             Some(Ok(m)) if identifier.is_none() => {
                                 debug!("Inbound connection with {:?}", m.intent_id);
                                 identifier.replace(m.intent_id);
-                                tx_inbound.send(m.signal).await?;
+                                tx_inbound.send(m.signal).await.map_err(|e| Error::Internal(e.into()))?;
                             },
                             Some(Ok(m)) if identifier.as_ref() == Some(&m.intent_id) => {
-                                tx_inbound.send(m.signal).await?;
+                                tx_inbound.send(m.signal).await.map_err(|e| Error::Internal(e.into()))?;
                             },
                             Some(Ok(m)) => error!("Received message with unexpected identifier {:?}", m.intent_id),
                             Some(Err(e)) => error!("Error ws_rxing from WS: {:?}", e),
@@ -266,7 +301,7 @@ impl WebRtcTransport {
                             signal,
                         };
                         debug!("listen: sending message {:?}", m);
-                        let bytes = serde_json::to_vec(&m)?;
+                        let bytes = serde_json::to_vec(&m).map_err(|e| Error::Internal(e.into()))?;
                         ws_tx.send(Message::Binary(bytes)).await?;
                     },
                 }

@@ -4,17 +4,31 @@
 [![Cargo](https://img.shields.io/crates/v/libp2p-webrtc.svg)](https://crates.io/crates/libp2p-webrtc)
 [![Documentation](https://docs.rs/libp2p-webrtc/badge.svg)](https://docs.rs/libp2p-webrtc)
 
+WebRTC transport for rust-libp2p for both native and WebAssembly (browser). For
+initiating a connection between two peers, both of them need to connect to the
+same WebSocket signaling server (via a call to `listen_on`). Either one can dial
+the other peer by using the `p2p-webrtc-star` protocol. Note, that this crate is
+currently not interoperable with the respective js-libp2p and go-libp2p
+implementations.
 
-// TODO
-- [ ] Error handling
-- [ ] Handle connection storm
-- Mention that wasm transport is `!Send`
-...
+Additional, a signaling server implementation is provided within the crate.
 
 ## Quickstart
 
-// TODO
-...
+```rust
+let base_transport = WebRtcTransport::new(peer_id, vec!["stun:stun.l.google.com:19302"]);
+let transport = base_transport.upgrade()...
+
+..
+
+swarm
+    .listen_on(
+        "/ip4/127.0.0.1/tcp/8001/ws/p2p-webrtc-star"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+```
 
 ## License
 

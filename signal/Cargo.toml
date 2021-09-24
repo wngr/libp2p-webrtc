@@ -1,0 +1,29 @@
+[package]
+name = "libp2p-webrtc-star-signaling-server"
+version = "0.1.0"
+edition = "2018"
+authors = ["Oliver Wangler <oliver@wngr.de>"]
+description = "WebRTC signaling server"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/wngr/libp2p-webrtc"
+homepage = "https://github.com/wngr/libp2p-webrtc"
+documentation = "https://docs.rs/libp2p-webrtc"
+keywords = ["webrtc", "libp2p", "transport", "signaling"]
+readme = "README.md"
+
+[dependencies]
+acme-lib = "0.8.2"
+anyhow = "1.0.44"
+async-tungstenite = { version = "0.15.0", features = ["tokio", "tokio-rustls-native-certs"] }
+clap = "3.0.0-beta.4"
+futures = "0.3.17"
+parking_lot = "0.11.2"
+serde = { version = "1.0.130", features = ["derive"] }
+serde_json = "1.0.68"
+tokio = { version = "1.12.0", features = ["full"] }
+tokio-rustls = "0.22.0"
+tokio-stream = "0.1.7"
+tokio-util = { version = "0.6.8", features = ["compat"] }
+tracing = "0.1.28"
+tracing-subscriber = "0.2.24"
+warp = "0.3.1"

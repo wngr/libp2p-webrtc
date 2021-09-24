@@ -1,6 +1,6 @@
 [package]
 name = "libp2p-webrtc"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2018"
 authors = ["Oliver Wangler <oliver@wngr.de>"]
 description = "WebRTC transport for libp2p"
@@ -9,7 +9,7 @@ repository = "https://github.com/wngr/libp2p-webrtc"
 homepage = "https://github.com/wngr/libp2p-webrtc"
 documentation = "https://docs.rs/libp2p-webrtc"
 keywords = ["webrtc", "libp2p", "transport"]
-readme = "README.md"
+readme = "../README.md"
 
 [dependencies]
 anyhow = "1.0.44"
@@ -26,8 +26,6 @@ thiserror = "1.0.29"
 async-datachannel = "0.2.2"
 async-tungstenite = { version = "0.15.0", features = ["tokio", "tokio-openssl"] }
 futures-timer = { version = "3.0.2" }
-tokio = { version = "1.12.0", features = ["macros", "rt-multi-thread" ] }
-tokio-stream = "0.1.7"
 parking_lot = "0.11.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

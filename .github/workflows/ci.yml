@@ -16,16 +16,20 @@ jobs:
       run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
 
     - name: cargo fmt
+      working-directory: libp2p-webrtc
       run: cargo fmt --all -- --check
 
     - name: cargo clippy
+      working-directory: libp2p-webrtc
       run: cargo clippy --target ${{ matrix.toolchain }} --workspace --examples --tests --all-features -- -D warnings
     
     - name: cargo build
+      working-directory: libp2p-webrtc
       run: cargo build --locked --target ${{ matrix.toolchain }}
 
     - name: cargo test
       if: ${{ matrix.toolchain != 'wasm32-unknown-unknown' }}
+      working-directory: libp2p-webrtc
       run: RUST_LOG=debug cargo test --all-features --target ${{ matrix.toolchain }}
 
   integration:
@@ -44,3 +48,27 @@ jobs:
       working-directory: integration
       run: cargo run
 
+  signaling-server:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout sources
+      uses: actions/checkout@v2
+
+    - name: setup rustup
+      run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
+
+    - name: cargo fmt
+      working-directory: signal
+      run: cargo fmt --all -- --check
+
+    - name: cargo clippy
+      working-directory: signal
+      run: cargo clippy --workspace --examples --tests --all-features -- -D warnings
+    
+    - name: cargo build
+      working-directory: signal
+      run: cargo build --locked
+
+    - name: cargo test
+      working-directory: signal
+      run: RUST_LOG=debug cargo test --all-features

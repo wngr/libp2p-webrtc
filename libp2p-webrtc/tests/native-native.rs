@@ -62,8 +62,9 @@ mod tests {
     async fn native_native() -> anyhow::Result<()> {
         fmt::init();
         let mut cmd = Command::new("cargo");
-        cmd.args(&["run", "--bin", "signaling-server"])
+        cmd.args(&["run", "--", "--interface", "127.0.0.1"])
             .stdout(Stdio::piped())
+            .current_dir("../signal")
             .kill_on_drop(true);
         let mut server = cmd.spawn()?;
         let stdout = server.stdout.take().unwrap();

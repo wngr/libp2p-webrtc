@@ -8,8 +8,8 @@ use tokio::{
 
 async fn start_signaling_server() -> anyhow::Result<Child> {
     let mut cmd = Command::new("cargo");
-    cmd.args(&["run", "--bin", "signaling-server", "--", "127.0.0.1:8001"])
-        .current_dir("..")
+    cmd.args(&["run", "--", "--interface", "127.0.0.1", "--port", "8001"])
+        .current_dir("../signal")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
@@ -39,7 +39,7 @@ async fn wasm_wasm() -> anyhow::Result<()> {
         "--",
         "wasm_wasm",
     ])
-    .current_dir("..")
+    .current_dir("../libp2p-webrtc")
     .stdout(Stdio::inherit())
     .stderr(Stdio::inherit())
     .kill_on_drop(true);
@@ -60,7 +60,7 @@ async fn wasm_native() -> anyhow::Result<()> {
         "--example",
         "interop",
     ])
-    .current_dir("..")
+    .current_dir("../libp2p-webrtc")
     .stdout(Stdio::piped())
     .stderr(Stdio::inherit())
     .kill_on_drop(true);
@@ -79,7 +79,7 @@ async fn wasm_native() -> anyhow::Result<()> {
 
     let mut cmd = Command::new("wasm-pack");
     cmd.args(&["test", "--headless", "--chrome", "--", "--", "interop"])
-        .current_dir("..")
+        .current_dir("../libp2p-webrtc")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .env("TEST_PEER", peer.unwrap())

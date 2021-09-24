@@ -1,6 +1,6 @@
 # libp2p-webrtc
 
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/wngr/async-datachannel)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/wngr/libp2p-webrtc)
 [![Cargo](https://img.shields.io/crates/v/libp2p-webrtc.svg)](https://crates.io/crates/libp2p-webrtc)
 [![Documentation](https://docs.rs/libp2p-webrtc/badge.svg)](https://docs.rs/libp2p-webrtc)
 
@@ -18,7 +18,8 @@ Additional, a signaling server implementation is provided within the crate.
 
 ## Quickstart
 
-To compile this crate, you need `gcc g++ libssl-dev make cmake clang`.
+To compile this crate, you need `gcc g++ libssl-dev make cmake clang
+pkg-config`.
 
 ```rust
 let base_transport = WebRtcTransport::new(peer_id, vec!["stun:stun.l.google.com:19302"]);

@@ -58,7 +58,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_native() -> anyhow::Result<()> {
+    async fn check_public_server() -> anyhow::Result<()> {
         fmt::init();
         let mut swarm_0 = mk_swarm();
         let peer_0 = *swarm_0.local_peer_id();

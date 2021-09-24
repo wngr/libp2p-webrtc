@@ -115,14 +115,14 @@ mod tests {
                         result: Ok(PingSuccess::Ping { rtt }),
                     })) if peer == peer_1 => {
                         info!("Ping to {} is {}ms", peer, rtt.as_millis());
-                        return Ok(());
+                        return Ok(swarm_0);
                     }
                     other => {
                         info!("Unhandled {:?}", other);
                     }
                 }
             }
-            anyhow::Result::<_, anyhow::Error>::Ok(())
+            anyhow::Result::<_, anyhow::Error>::Ok(swarm_0)
         };
         let s1 = async move {
             while let Some(event) = swarm_1.next().await {
@@ -136,14 +136,14 @@ mod tests {
                         result: Ok(PingSuccess::Ping { rtt }),
                     })) if peer == peer_0 => {
                         info!("Ping to {} is {}ms", peer, rtt.as_millis());
-                        return Ok(());
+                        return Ok(swarm_1);
                     }
                     other => {
                         info!("Unhandled {:?}", other);
                     }
                 }
             }
-            anyhow::Result::<_, anyhow::Error>::Ok(())
+            anyhow::Result::<_, anyhow::Error>::Ok(swarm_1)
         };
         timeout(Duration::from_secs(5), future::try_join(s0, s1)).await??;
         Ok(())

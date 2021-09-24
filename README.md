@@ -18,6 +18,8 @@ Additional, a signaling server implementation is provided within the crate.
 
 ## Quickstart
 
+To compile this crate, you need `gcc g++ libssl-dev make cmake clang`.
+
 ```rust
 let base_transport = WebRtcTransport::new(peer_id, vec!["stun:stun.l.google.com:19302"]);
 let transport = base_transport.upgrade()...

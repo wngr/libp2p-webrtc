@@ -114,7 +114,8 @@ impl Transport for WebRtcTransport {
         // /ip4/ws_signaling_ip/tcp/ws_signaling_port/{ws,wss}/p2p-webrtc-star/p2p/remote_peer_id
         let s = try_stream! {
             let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
-            yield ListenerEvent::NewAddress(addr.clone());
+            let local_addr = addr.clone().with(Protocol::P2p(self.own_peer_id.into()));
+            yield ListenerEvent::NewAddress(local_addr.clone());
             let mut ws_rx = ws_rx.fuse();
 
             // TODO
@@ -135,7 +136,7 @@ impl Transport for WebRtcTransport {
                            },
                            _ => {
                                info!("Address expired {}", addr);
-                               yield ListenerEvent::AddressExpired(addr.clone());
+                               yield ListenerEvent::AddressExpired(local_addr.clone());
                                return;
                            }
                         };
@@ -175,7 +176,7 @@ impl Transport for WebRtcTransport {
                         yield ListenerEvent::Upgrade {
                             upgrade: async move { maybe_upgrade.map_err(Into::into) }.boxed(),
                             remote_addr: addr.clone().with(Protocol::P2p(id.caller.into())),
-                            local_addr: addr.clone().with(Protocol::P2p(self.own_peer_id.into()))
+                            local_addr: local_addr.clone()
                         };
                     },
                     (item, token) = outbound.select_next_some() => {

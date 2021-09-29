@@ -98,8 +98,11 @@ impl Transport for WebRtcTransport {
         Self: Sized,
     {
         debug!("called listen on with {}", addr);
-        let (signaling_uri, _) = extract_uri(&addr)
+        let (signaling_uri, maybe_p2p) = extract_uri(&addr)
             .map_err(|_| libp2p::TransportError::MultiaddrNotSupported(addr.clone()))?;
+        if maybe_p2p.is_some() {
+            return Err(libp2p::TransportError::MultiaddrNotSupported(addr));
+        }
         let signaling_uri = format!("{}/{}", signaling_uri, self.own_peer_id);
         let local_addr = addr.clone().with(Protocol::P2p(self.own_peer_id.into()));
         // input addr

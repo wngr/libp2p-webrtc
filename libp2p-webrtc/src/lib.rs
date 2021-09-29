@@ -1,10 +1,11 @@
 #![allow(clippy::let_and_return)]
 use std::{
+    collections::BTreeMap,
+    pin::Pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
 };
 
 use crate::ws::{CombinedStream, Message};
@@ -16,20 +17,23 @@ use async_datachannel_wasm::{
     DataStream, Message as DataChannelMessage, PeerConnection, RtcConfig,
 };
 use async_stream::try_stream;
-use futures_timer::Delay;
 use libp2p::{
     core::transport::ListenerEvent,
     futures::{
-        channel::mpsc, future::BoxFuture, pin_mut, select_biased, stream::BoxStream, Future,
+        channel::mpsc,
+        future::BoxFuture,
+        pin_mut, select, select_biased,
+        stream::{BoxStream, FuturesUnordered},
         FutureExt, SinkExt, StreamExt, TryFutureExt,
     },
     multiaddr::Protocol,
     Multiaddr, PeerId, Transport,
 };
-use log::{debug, error, warn};
+use log::*;
 #[cfg(target_arch = "wasm32")]
 use send_wrapper::SendWrapper;
 use serde::{Deserialize, Serialize};
+use streamunordered::{StreamUnordered, StreamYield};
 use thiserror::Error;
 
 mod ws;
@@ -41,7 +45,7 @@ pub struct WebRtcTransport {
     own_peer_id: PeerId,
 }
 // Uniquely identify a signaling request. PeerId is the initiator's peer id and a counter.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Eq, Hash, Ord, PartialOrd)]
 pub struct SignalingId {
     #[serde(with = "serde_str")]
     pub caller: PeerId,
@@ -61,6 +65,8 @@ pub struct SignalingMessage {
 pub enum Error {
     #[error("Connection to signaling server failed: {0}")]
     ConnectionToSignalingServerFailed(String),
+    #[error("Unexpected Message: {0}")]
+    UnexpectedMessage(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -104,54 +110,96 @@ impl Transport for WebRtcTransport {
             return Err(libp2p::TransportError::MultiaddrNotSupported(addr));
         }
         let signaling_uri = format!("{}/{}", signaling_uri, self.own_peer_id);
-        let local_addr = addr.clone().with(Protocol::P2p(self.own_peer_id.into()));
         // input addr
         // /ip4/ws_signaling_ip/tcp/ws_signaling_port/{ws,wss}/p2p-webrtc-star/p2p/remote_peer_id
-        Ok(try_stream! {
-            let mut backoff: Option<u64> = None;
+        let s = try_stream! {
+            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
+            yield ListenerEvent::NewAddress(addr.clone());
+            let mut ws_rx = ws_rx.fuse();
+
+            // TODO
+            // let mut backoff: Option<u64> = None;
+            let mut pending_upgrades = FuturesUnordered::new();
+            let mut open_upgrades =
+                BTreeMap::<SignalingId, mpsc::Sender<DataChannelMessage>>::new();
+            let mut outbound = StreamUnordered::new();
             loop {
-                let upgrade = self.listen_single(signaling_uri.clone()).await;
-                let is_outbound_conn_err = if let Err(ref e) = upgrade {
-                    matches!(
-                        e,
-                        Error::ConnectionToSignalingServerFailed(_)
-                    )
-                } else {
-                    // Reset backoff
-                    backoff.take();
-                    false
-                };
-
-                let remote_addr = if let Ok((p, _)) = upgrade {
-                    addr.clone().with(Protocol::P2p(p.into()))
-                } else {
-                    addr.clone()
-                };
-
-                yield ListenerEvent::Upgrade {
-                    upgrade: async move {
-                        upgrade
-                            .map_err(Into::into)
-                            .map(|(_, u)| u)
+                select! {
+                    from_ws = ws_rx.next() => {
+                        let message = match from_ws {
+                           Some(Ok(Message::Text(t))) => {
+                               serde_json::from_str::<SignalingMessage>(&t)
+                           },
+                           Some(Ok(Message::Binary(b))) => {
+                               serde_json::from_slice::<SignalingMessage>(&b[..])
+                           },
+                           _ => {
+                               info!("Address expired {}", addr);
+                               yield ListenerEvent::AddressExpired(addr.clone());
+                               return;
+                           }
+                        };
+                        match message {
+                          Ok(SignalingMessage { intent_id, callee, signal }) => {
+                            if callee != self.own_peer_id {
+                                yield ListenerEvent::Error(Error::UnexpectedMessage(format!("Message for {}", callee)));
+                                continue;
+                            }
+                            debug!("Received {:?} {:?}", intent_id, signal);
+                            if let Some(tx) = open_upgrades.get_mut(&intent_id) {
+                                let _ = tx.start_send(signal);
+                            } else {
+                                let (tx_outbound, rx_outbound) = mpsc::channel(8);
+                                let (mut tx_inbound, rx_inbound) = mpsc::channel(8);
+                                let id = intent_id.clone();
+                                outbound.insert(
+                                    rx_outbound.map(move |m| (id.clone(), m))
+                                    );
+                                let conn =
+                                    PeerConnection::new(&self.config, (tx_outbound, rx_inbound)).map_err(Error::Internal).unwrap();
+                                tx_inbound.start_send(signal).expect("Channel open");
+                                open_upgrades.insert(intent_id.clone(), tx_inbound);
+                                let u = conn.accept().map(move |r| (intent_id, r));
+                                #[cfg(target_arch = "wasm32")]
+                                let u = SendWrapper::new(u);
+                                pending_upgrades.push(u.boxed());
+                              }
+                          },
+                          Err(e) => {
+                            error!("Error deserializing message {:?}", e);
+                          }
+                        }
+                    },
+                    (id, maybe_upgrade) = pending_upgrades.select_next_some() => {
+                        open_upgrades.remove(&id);
+                        yield ListenerEvent::Upgrade {
+                            upgrade: async move { maybe_upgrade.map_err(Into::into) }.boxed(),
+                            remote_addr: addr.clone().with(Protocol::P2p(id.caller.into())),
+                            local_addr: addr.clone().with(Protocol::P2p(self.own_peer_id.into()))
+                        };
+                    },
+                    (item, token) = outbound.select_next_some() => {
+                        match item {
+                            StreamYield::Item((intent_id, signal)) => {
+                                let m = SignalingMessage {
+                                    intent_id,
+                                    signal,
+                                    callee: self.own_peer_id
+                                };
+                                let bytes = serde_json::to_vec(&m).map_err(|e| Error::Internal(e.into())).unwrap();
+                                let _ = ws_tx.send(Message::Binary(bytes)).await;
+                            }
+                            _ => {
+                                Pin::new(&mut outbound).remove(token);
+                            }
+                        }
                     }
-                    .boxed(),
-                    remote_addr,
-                    local_addr: local_addr.clone(),
-                };
-                if is_outbound_conn_err {
-                    let wait_for = if let Some(b) = backoff.as_mut() {
-                        *b *= 2;
-                        *b
-                    } else {
-                        backoff.replace(1);
-                        1
-                    };
-                    warn!("Outbound connection error to signaling server, will retry in {} secs", wait_for);
-                    Delay::new(Duration::from_secs(wait_for)).await;
                 }
             }
-        }
-        .boxed())
+        };
+        #[cfg(target_arch = "wasm32")]
+        let s = SendWrapper::new(s);
+        Ok(s.boxed())
     }
 
     fn dial(
@@ -235,85 +283,6 @@ impl Transport for WebRtcTransport {
     ) -> Option<libp2p::Multiaddr> {
         // TODO?
         None
-    }
-}
-
-impl WebRtcTransport {
-    fn listen_single(
-        &self,
-        signaling_uri: String,
-    ) -> impl Future<Output = Result<(PeerId, DataStream), Error>> + Send {
-        let config = self.config.clone();
-        let own_peer_id = self.own_peer_id;
-        let fut = async move {
-            debug!("connecting to {}", signaling_uri);
-            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri)
-                .await
-                .map_err(|e| Error::ConnectionToSignalingServerFailed(format!("{:#}", e)))?
-                .split();
-            let mut ws_rx = ws_rx.fuse();
-            debug!("connected to {}", signaling_uri);
-
-            let (tx_outbound, mut rx_outbound) = mpsc::channel(32);
-            let (mut tx_inbound, rx_inbound) = mpsc::channel(32);
-            let conn =
-                PeerConnection::new(&config, (tx_outbound, rx_inbound)).map_err(Error::Internal)?;
-
-            let upgrade = conn.accept().into_stream().fuse();
-            pin_mut!(upgrade);
-            let mut identifier = None;
-            let io = loop {
-                select_biased! {
-                    conn = upgrade.next() => {
-                        let conn = conn.context("Stream ended")?;
-                        debug!("listen: created data stream");
-                        break conn?;
-                    },
-                    incoming_ws = ws_rx.next() => {
-                        let incoming_ws = incoming_ws.context("Stream ended")?;
-                        debug!("listen: received message {:?}", incoming_ws);
-                        let message = match incoming_ws {
-                           Ok(Message::Text(t)) => {
-                               Some(serde_json::from_str::<SignalingMessage>(&t))
-                           },
-                           Ok(Message::Binary(b)) => {
-                               Some(serde_json::from_slice::<SignalingMessage>(&b[..]))
-                           },
-                           Ok(Message::Close) => None,
-                           x => return Err(anyhow::anyhow!("Connection to signaling server closed ({:?})", x).into()),
-                        };
-                        match message {
-                            Some(Ok(m)) if identifier.is_none() => {
-                                debug!("Inbound connection with {:?}", m.intent_id);
-                                identifier.replace(m.intent_id);
-                                tx_inbound.send(m.signal).await.map_err(|e| Error::Internal(e.into()))?;
-                            },
-                            Some(Ok(m)) if identifier.as_ref() == Some(&m.intent_id) => {
-                                tx_inbound.send(m.signal).await.map_err(|e| Error::Internal(e.into()))?;
-                            },
-                            Some(Ok(m)) => error!("Received message with unexpected identifier {:?}", m.intent_id),
-                            Some(Err(e)) => error!("Error ws_rxing from WS: {:?}", e),
-                            None => {},
-                        }
-                    },
-                    signal = rx_outbound.next() => {
-                        let signal = signal.context("Stream ended")?;
-                        let m = SignalingMessage {
-                            intent_id: identifier.as_ref().cloned().expect("Sending message before received one"),
-                            callee: own_peer_id,
-                            signal,
-                        };
-                        debug!("listen: sending message {:?}", m);
-                        let bytes = serde_json::to_vec(&m).map_err(|e| Error::Internal(e.into()))?;
-                        ws_tx.send(Message::Binary(bytes)).await?;
-                    },
-                }
-            };
-            Ok((identifier.expect("Negotiation happened").caller, io))
-        };
-        #[cfg(target_arch = "wasm32")]
-        let fut = SendWrapper::new(fut);
-        fut
     }
 }
 

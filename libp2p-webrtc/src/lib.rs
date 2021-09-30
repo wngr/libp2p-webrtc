@@ -6,6 +6,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use crate::ws::{CombinedStream, Message};
@@ -17,6 +18,7 @@ use async_datachannel_wasm::{
     DataStream, Message as DataChannelMessage, PeerConnection, RtcConfig,
 };
 use async_stream::try_stream;
+use futures_timer::Delay;
 use libp2p::{
     core::transport::ListenerEvent,
     futures::{
@@ -113,90 +115,105 @@ impl Transport for WebRtcTransport {
         // input addr
         // /ip4/ws_signaling_ip/tcp/ws_signaling_port/{ws,wss}/p2p-webrtc-star/p2p/remote_peer_id
         let s = try_stream! {
-            let (mut ws_tx, ws_rx) = CombinedStream::connect(&signaling_uri).await?.split();
             let local_addr = addr.clone().with(Protocol::P2p(self.own_peer_id.into()));
-            yield ListenerEvent::NewAddress(local_addr.clone());
-            let mut ws_rx = ws_rx.fuse();
 
-            // TODO
-            // let mut backoff: Option<u64> = None;
+            let mut backoff: Option<u64> = None;
             let mut pending_upgrades = FuturesUnordered::new();
             let mut open_upgrades =
                 BTreeMap::<SignalingId, mpsc::Sender<DataChannelMessage>>::new();
             let mut outbound = StreamUnordered::new();
+
             loop {
-                select! {
-                    from_ws = ws_rx.next() => {
-                        let message = match from_ws {
-                           Some(Ok(Message::Text(t))) => {
-                               serde_json::from_str::<SignalingMessage>(&t)
-                           },
-                           Some(Ok(Message::Binary(b))) => {
-                               serde_json::from_slice::<SignalingMessage>(&b[..])
-                           },
-                           _ => {
-                               info!("Address expired {}", addr);
-                               yield ListenerEvent::AddressExpired(local_addr.clone());
-                               return;
-                           }
-                        };
-                        match message {
-                          Ok(SignalingMessage { intent_id, callee, signal }) => {
-                            if callee != self.own_peer_id {
-                                yield ListenerEvent::Error(Error::UnexpectedMessage(format!("Message for {}", callee)));
-                                continue;
-                            }
-                            debug!("Received {:?} {:?}", intent_id, signal);
-                            if let Some(tx) = open_upgrades.get_mut(&intent_id) {
-                                let _ = tx.start_send(signal);
-                            } else {
-                                let (tx_outbound, rx_outbound) = mpsc::channel(8);
-                                let (mut tx_inbound, rx_inbound) = mpsc::channel(8);
-                                let id = intent_id.clone();
-                                outbound.insert(
-                                    rx_outbound.map(move |m| (id.clone(), m))
-                                    );
-                                let conn =
-                                    PeerConnection::new(&self.config, (tx_outbound, rx_inbound)).map_err(Error::Internal).unwrap();
-                                tx_inbound.start_send(signal).expect("Channel open");
-                                open_upgrades.insert(intent_id.clone(), tx_inbound);
-                                let u = conn.accept().map(move |r| (intent_id, r));
-                                #[cfg(target_arch = "wasm32")]
-                                let u = SendWrapper::new(u);
-                                pending_upgrades.push(u.boxed());
+            if let Ok(ws) = CombinedStream::connect(&signaling_uri).await {
+                yield ListenerEvent::NewAddress(local_addr.clone());
+                backoff.take();
+                let (mut ws_tx, ws_rx) = ws.split();
+                let mut ws_rx = ws_rx.fuse();
+                'inner: loop {
+                    select! {
+                        from_ws = ws_rx.next() => {
+                            let message = match from_ws {
+                               Some(Ok(Message::Text(t))) => {
+                                   serde_json::from_str::<SignalingMessage>(&t)
+                               },
+                               Some(Ok(Message::Binary(b))) => {
+                                   serde_json::from_slice::<SignalingMessage>(&b[..])
+                               },
+                               _ => {
+                                   info!("Address expired {}", addr);
+                                   yield ListenerEvent::AddressExpired(local_addr.clone());
+                                   break 'inner;
+                               }
+                            };
+                            match message {
+                              Ok(SignalingMessage { intent_id, callee, signal }) => {
+                                if callee != self.own_peer_id {
+                                    yield ListenerEvent::Error(Error::UnexpectedMessage(format!("Message for {}", callee)));
+                                    continue;
+                                }
+                                debug!("Received {:?} {:?}", intent_id, signal);
+                                if let Some(tx) = open_upgrades.get_mut(&intent_id) {
+                                    let _ = tx.start_send(signal);
+                                } else {
+                                    let (tx_outbound, rx_outbound) = mpsc::channel(8);
+                                    let (mut tx_inbound, rx_inbound) = mpsc::channel(8);
+                                    let id = intent_id.clone();
+                                    outbound.insert(
+                                        rx_outbound.map(move |m| (id.clone(), m))
+                                        );
+                                    let conn =
+                                        PeerConnection::new(&self.config, (tx_outbound, rx_inbound)).map_err(Error::Internal).unwrap();
+                                    tx_inbound.start_send(signal).expect("Channel open");
+                                    open_upgrades.insert(intent_id.clone(), tx_inbound);
+                                    let u = conn.accept().map(move |r| (intent_id, r));
+                                    #[cfg(target_arch = "wasm32")]
+                                    let u = SendWrapper::new(u);
+                                    pending_upgrades.push(u.boxed());
+                                  }
+                              },
+                              Err(e) => {
+                                error!("Error deserializing message {:?}", e);
                               }
-                          },
-                          Err(e) => {
-                            error!("Error deserializing message {:?}", e);
-                          }
-                        }
-                    },
-                    (id, maybe_upgrade) = pending_upgrades.select_next_some() => {
-                        open_upgrades.remove(&id);
-                        yield ListenerEvent::Upgrade {
-                            upgrade: async move { maybe_upgrade.map_err(Into::into) }.boxed(),
-                            remote_addr: addr.clone().with(Protocol::P2p(id.caller.into())),
-                            local_addr: local_addr.clone()
-                        };
-                    },
-                    (item, token) = outbound.select_next_some() => {
-                        match item {
-                            StreamYield::Item((intent_id, signal)) => {
-                                let m = SignalingMessage {
-                                    intent_id,
-                                    signal,
-                                    callee: self.own_peer_id
-                                };
-                                let bytes = serde_json::to_vec(&m).map_err(|e| Error::Internal(e.into())).unwrap();
-                                let _ = ws_tx.send(Message::Binary(bytes)).await;
                             }
-                            _ => {
-                                Pin::new(&mut outbound).remove(token);
+                        },
+                        (id, maybe_upgrade) = pending_upgrades.select_next_some() => {
+                            open_upgrades.remove(&id);
+                            yield ListenerEvent::Upgrade {
+                                upgrade: async move { maybe_upgrade.map_err(Into::into) }.boxed(),
+                                remote_addr: addr.clone().with(Protocol::P2p(id.caller.into())),
+                                local_addr: local_addr.clone()
+                            };
+                        },
+                        (item, token) = outbound.select_next_some() => {
+                            match item {
+                                StreamYield::Item((intent_id, signal)) => {
+                                    let m = SignalingMessage {
+                                        intent_id,
+                                        signal,
+                                        callee: self.own_peer_id
+                                    };
+                                    let bytes = serde_json::to_vec(&m).map_err(|e| Error::Internal(e.into())).unwrap();
+                                    let _ = ws_tx.send(Message::Binary(bytes)).await;
+                                }
+                                _ => {
+                                    Pin::new(&mut outbound).remove(token);
+                                }
                             }
                         }
                     }
                 }
+            } else {
+                let wait_for = if let Some(b) = backoff.as_mut() {
+                    *b *= 2;
+                    *b
+                } else {
+                    backoff.replace(1);
+                    1
+                };
+                warn!("Outbound connection error to signaling server, will retry in {} secs", wait_for);
+                Delay::new(Duration::from_secs(wait_for)).await;
             }
+          }
         };
         #[cfg(target_arch = "wasm32")]
         let s = SendWrapper::new(s);

@@ -10,7 +10,15 @@ mod tests {
     };
     use libp2p_webrtc::WebRtcTransport;
     use log::*;
-    use std::{collections::BTreeSet, process::Stdio, time::Duration};
+    use std::{
+        collections::BTreeSet,
+        process::Stdio,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
     use tokio::{
         io::{AsyncBufReadExt, BufReader},
         process::{Child, Command},
@@ -81,9 +89,24 @@ mod tests {
     #[tokio::test]
     async fn native_native() -> anyhow::Result<()> {
         let _ = fmt::try_init();
-        let mut _server = start_signaling_server().await?;
-        native_native_single().await?;
-        native_native_concurrent().await?;
+        {
+            // wait for server init
+            let mut _server = start_signaling_server().await?;
+            native_native_single().await?;
+            native_native_concurrent().await?;
+        }
+        {
+            // late server init
+            future::try_join3(
+                async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    start_signaling_server().await
+                },
+                native_native_single(),
+                native_native_concurrent(),
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -113,14 +136,15 @@ mod tests {
             .unwrap();
 
         let s0 = async move {
-            swarm_0.dial_addr(
-                format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_1).parse()?,
-            )?;
-
             while let Some(event) = swarm_0.next().await {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("Listening on {}", address);
+
+                        swarm_0.dial_addr(
+                            format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_1)
+                                .parse()?,
+                        )?;
                     }
 
                     SwarmEvent::Behaviour(MyEvent::Ping(PingEvent {
@@ -158,7 +182,7 @@ mod tests {
             }
             anyhow::Result::<_, anyhow::Error>::Ok(swarm_1)
         };
-        timeout(Duration::from_secs(5), future::try_join(s0, s1)).await??;
+        timeout(Duration::from_secs(10), future::try_join(s0, s1)).await??;
         Ok(())
     }
 
@@ -176,6 +200,8 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
+        let listener_connected = Arc::new(AtomicBool::new(false));
+        let connected = listener_connected.clone();
 
         const NUM_DIALERS: usize = 10;
         let s0 = async move {
@@ -184,6 +210,7 @@ mod tests {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("Listening on {}", address);
+                        connected.store(true, Ordering::Relaxed);
                     }
 
                     SwarmEvent::Behaviour(MyEvent::Ping(PingEvent {
@@ -204,8 +231,12 @@ mod tests {
             anyhow::Result::<_, anyhow::Error>::Ok(listener)
         }
         .boxed();
-        let dialers = (0..NUM_DIALERS).map(|_| mk_swarm()).map(|mut swarm| {
+        let dialers = (0..NUM_DIALERS).map(|_| mk_swarm()).map(move |mut swarm| {
+            let connected = listener_connected.clone();
             async move {
+                while !connected.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
                 swarm.dial_addr(
                     format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_0).parse()?,
                 )?;
@@ -233,7 +264,7 @@ mod tests {
         });
 
         timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(10),
             future::try_join_all(std::iter::once(s0).chain(dialers)),
         )
         .await??;

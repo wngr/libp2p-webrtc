@@ -15,7 +15,7 @@ readme = "../README.md"
 anyhow = "1.0.44"
 async-stream = "0.3.2"
 http = "0.2.5"
-libp2p = { version = "0.40.0", default-features = false }
+libp2p = { version = "0.40.0-rc.2", default-features = false }
 log = "0.4.14"
 pin-project = "1.0.8"
 serde = { version = "1.0.130", features = ["derive"] }
@@ -33,7 +33,7 @@ parking_lot = "0.11.2"
 async-datachannel-wasm = "0.1.2"
 futures-timer = { version = "3.0.2", features = ["wasm-bindgen"] }
 send_wrapper = { version = "0.5.0", features = ["futures"] }
-libp2p = { version = "0.40.0", features = ["wasm-bindgen"], default_features = false }
+libp2p = { version = "0.40.0-rc.2", features = ["wasm-bindgen"], default_features = false }
 ws_stream_wasm = "0.7.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
@@ -46,7 +46,7 @@ wasm-bindgen-futures = "0.4.28"
 wasm-bindgen-test = "0.3.28"
 
 [patch.crates-io]
-libp2p = { git = "https://github.com/wngr/rust-libp2p", branch = "ow/wasm" }
+libp2p = { git = "https://github.com/wngr/rust-libp2p", branch = "wasm-support" }
 
 [dev-dependencies]
-libp2p = { version = "0.40.0", features = ["ping", "noise", "mplex", "yamux"], default_features = false }
+libp2p = { version = "0.40.0-rc.2", features = ["ping", "noise", "mplex", "yamux"], default_features = false }

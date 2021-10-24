@@ -1,7 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use libp2p::{
-        core::{self, upgrade::AuthenticationVersion, PeerId},
+        core::{self, transport::upgrade, PeerId},
         futures::{future, StreamExt},
         identity, mplex, noise,
         ping::{Ping, PingConfig, PingEvent, PingSuccess},
@@ -27,11 +27,8 @@ mod tests {
                 .into_authentic(&identity)
                 .expect("Signing libp2p-noise static DH keypair failed.");
 
-            base.upgrade()
-                .authenticate_with_version(
-                    noise::NoiseConfig::xx(noise_keys).into_authenticated(),
-                    AuthenticationVersion::V1SimultaneousOpen,
-                )
+            base.upgrade(upgrade::Version::V1Lazy)
+                .authenticate(noise::NoiseConfig::xx(noise_keys).into_authenticated())
                 .multiplex(core::upgrade::SelectUpgrade::new(
                     yamux::YamuxConfig::default(),
                     mplex::MplexConfig::default(),

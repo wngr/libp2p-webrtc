@@ -4,9 +4,6 @@
 [![Cargo](https://img.shields.io/crates/v/libp2p-webrtc.svg)](https://crates.io/crates/libp2p-webrtc)
 [![Documentation](https://docs.rs/libp2p-webrtc/badge.svg)](https://docs.rs/libp2p-webrtc)
 
-**This currently depends on a fork of rust-libp2p, pending
-https://github.com/libp2p/rust-libp2p/pull/2245**
-
 WebRTC transport for rust-libp2p for both native and WebAssembly (browser). For
 initiating a connection between two peers, both of them need to connect to the
 same WebSocket signaling server (via a call to `listen_on`). Either one can dial

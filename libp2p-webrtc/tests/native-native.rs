@@ -6,7 +6,7 @@ mod tests {
         identity, mplex, noise,
         ping::{Ping, PingConfig, PingEvent, PingSuccess},
         swarm::{SwarmBuilder, SwarmEvent},
-        yamux, NetworkBehaviour, Swarm, Transport,
+        yamux, Multiaddr, NetworkBehaviour, Swarm, Transport,
     };
     use libp2p_webrtc::WebRtcTransport;
     use log::*;
@@ -138,9 +138,9 @@ mod tests {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("Listening on {}", address);
 
-                        swarm_0.dial_addr(
+                        swarm_0.dial(
                             format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_1)
-                                .parse()?,
+                                .parse::<Multiaddr>()?,
                         )?;
                     }
 
@@ -234,8 +234,9 @@ mod tests {
                 while !connected.load(Ordering::Relaxed) {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                swarm.dial_addr(
-                    format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_0).parse()?,
+                swarm.dial(
+                    format!("/ip4/127.0.0.1/tcp/8000/ws/p2p-webrtc-star/p2p/{}", peer_0)
+                        .parse::<Multiaddr>()?,
                 )?;
                 while let Some(event) = swarm.next().await {
                     match event {

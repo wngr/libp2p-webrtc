@@ -6,7 +6,7 @@ mod tests {
         identity, mplex, noise,
         ping::{Ping, PingConfig, PingEvent, PingSuccess},
         swarm::{SwarmBuilder, SwarmEvent},
-        yamux, NetworkBehaviour, Swarm, Transport,
+        yamux, Multiaddr, NetworkBehaviour, Swarm, Transport,
     };
     use libp2p_webrtc::WebRtcTransport;
     use log::*;
@@ -72,14 +72,14 @@ mod tests {
             .unwrap();
 
         swarm_0
-            .dial_addr(
+            .dial(
                 format!(
                     "/ip4/127.0.0.1/tcp/8001/ws/p2p-webrtc-star{}",
                     option_env!("TEST_PEER").expect(
                         "This test is only supposed to be run from the `integration` crate"
                     )
                 )
-                .parse()
+                .parse::<Multiaddr>()
                 .unwrap(),
             )
             .unwrap();

@@ -6,7 +6,7 @@ mod tests {
         identity, mplex, noise,
         ping::{Ping, PingConfig, PingEvent, PingSuccess},
         swarm::{SwarmBuilder, SwarmEvent},
-        yamux, NetworkBehaviour, Swarm, Transport,
+        yamux, Multiaddr, NetworkBehaviour, Swarm, Transport,
     };
     use libp2p_webrtc::WebRtcTransport;
     use log::*;
@@ -74,7 +74,7 @@ mod tests {
             .unwrap();
 
         let s0 = async move {
-            swarm_0.dial_addr(format!("{}/p2p/{}", SIGNALING_SERVER, peer_1).parse()?)?;
+            swarm_0.dial(format!("{}/p2p/{}", SIGNALING_SERVER, peer_1).parse::<Multiaddr>()?)?;
 
             while let Some(event) = swarm_0.next().await {
                 match event {

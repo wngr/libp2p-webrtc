@@ -1,6 +1,6 @@
 [package]
 name = "libp2p-webrtc"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2018"
 authors = ["Oliver Wangler <oliver@wngr.de>"]
 description = "WebRTC transport for libp2p"

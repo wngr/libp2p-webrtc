@@ -47,3 +47,6 @@ wasm-bindgen-test = "0.3.28"
 
 [dev-dependencies]
 libp2p = { version = "0.41.0", features = ["ping", "noise", "mplex", "yamux"], default_features = false }
+
+[patch.crates-io]
+libp2p = { git = "https://github.com/cloudpeers/rust-libp2p", branch = "tlfs" }

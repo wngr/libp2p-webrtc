@@ -2,7 +2,7 @@ use std::task::Poll;
 
 #[cfg(not(target_arch = "wasm32"))]
 use async_tungstenite::{
-    tokio::{connect_async, ConnectStream},
+    tokio::{connect_async_with_tls_connector, ConnectStream},
     WebSocketStream,
 };
 use libp2p::futures::{Sink, Stream};
@@ -61,7 +61,7 @@ impl From<Message> for async_tungstenite::tungstenite::Message {
 impl CombinedStream {
     pub(crate) async fn connect(uri: &str) -> anyhow::Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
-        let inner = InnerStream::Native(connect_async(uri).await?.0);
+        let inner = InnerStream::Native(connect_async_with_tls_connector(uri, None).await?.0);
         #[cfg(target_arch = "wasm32")]
         let inner = InnerStream::Wasm(ws_stream_wasm::WsMeta::connect(uri, None).await?.1);
         Ok(Self { inner })

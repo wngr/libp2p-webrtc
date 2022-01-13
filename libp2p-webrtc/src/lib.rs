@@ -124,7 +124,9 @@ impl Transport for WebRtcTransport {
             let mut outbound = StreamUnordered::new();
 
             loop {
-            if let Ok(ws) = CombinedStream::connect(&signaling_uri).await {
+                match CombinedStream::connect(&signaling_uri).await {
+                    Ok(ws) => {
+
                 yield ListenerEvent::NewAddress(local_addr.clone());
                 backoff.take();
                 let (mut ws_tx, ws_rx) = ws.split();
@@ -202,7 +204,8 @@ impl Transport for WebRtcTransport {
                         }
                     }
                 }
-            } else {
+            },
+            Err(e) =>  {
                 let wait_for = if let Some(b) = backoff.as_mut() {
                     *b *= 2;
                     *b
@@ -210,9 +213,10 @@ impl Transport for WebRtcTransport {
                     backoff.replace(1);
                     1
                 };
-                warn!("Outbound connection error to signaling server, will retry in {} secs", wait_for);
+                warn!("Outbound connection error to signaling server ({:?}), will retry in {} secs", e,wait_for);
                 Delay::new(Duration::from_secs(wait_for)).await;
             }
+          }
           }
         };
         #[cfg(target_arch = "wasm32")]

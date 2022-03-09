@@ -306,6 +306,16 @@ impl Transport for WebRtcTransport {
         // TODO?
         None
     }
+
+    fn dial_as_listener(
+        self,
+        addr: libp2p::Multiaddr,
+    ) -> Result<
+        <Self as libp2p::Transport>::Dial,
+        libp2p::TransportError<<Self as libp2p::Transport>::Error>,
+    > {
+        self.dial(addr)
+    }
 }
 
 pub mod serde_str {

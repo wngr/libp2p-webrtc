@@ -42,6 +42,7 @@ impl From<async_tungstenite::tungstenite::Message> for Message {
             async_tungstenite::tungstenite::Message::Ping(p) => Ping(p),
             async_tungstenite::tungstenite::Message::Pong(p) => Pong(p),
             async_tungstenite::tungstenite::Message::Close(_) => Close,
+            async_tungstenite::tungstenite::Message::Frame(_) => unreachable!(),
         }
     }
 }

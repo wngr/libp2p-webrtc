@@ -1,4 +1,7 @@
 # libp2p-webrtc
+**NOTE: webrtc support has been added to rust-libp2p. browser-to-browser is not
+yet supported. This crate will stay as-is and not receive any maintenance
+efforts anymore.**
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/wngr/libp2p-webrtc)
 [![Cargo](https://img.shields.io/crates/v/libp2p-webrtc.svg)](https://crates.io/crates/libp2p-webrtc)
